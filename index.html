@@ -823,7 +823,7 @@
          say so honestly ("not switched on yet") — nothing pretends
          a score posted when it didn't.
          ============================================================ */
-      var CLUB_API = ""; // same origin — the scoreboard service serves these routes
+      var CLUB_API = "https://club.realskillspress.com"; // same origin — the scoreboard service serves these routes
       var GRANT_KEY = "rsgClubGrant";
       var NICK_KEY = "rsgClubNick";
       var TRIAL_KEY = "rsgClubTrial"; // "1" once the free first post is used (this visit only)
@@ -851,9 +851,12 @@
         });
       }
       function clubPost(path, body) {
+        var hdrs = { "Content-Type": "application/json" };
+        var gr = clubGrant();
+        if (gr && gr.grant && gr.grant !== "session") hdrs["x-grant"] = gr.grant;
         return fetch(CLUB_API + path, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: hdrs,
           body: JSON.stringify(body)
         }).then(function (r) {
           return r.json().catch(function () { return {}; }).then(function (d) {
@@ -918,8 +921,8 @@
       function loadClubBoard() {
         var el = document.getElementById("club-board");
         if (!el) return;
-        clubGet("/scores").then(function (d) {
-          var rows = (d && d.scores) || [];
+        clubGet("/board?club=ellies-game-room").then(function (d) {
+          var rows = ((d && d.players) || []).map(function (p) { var g = (p.games && p.games.overall) || {}; return { nick: p.player, level: (g.level != null ? g.level : p.grade) || 1, stars: (g.stars != null ? g.stars : p.totalStars) || 0, trophies: (p.awards || []).length }; });
           if (!rows.length) {
             el.innerHTML = '<div class="ledger-row"><span>No friend scores on the board yet — yours could be the first!</span><span></span></div>';
             return;
@@ -946,18 +949,23 @@
           }
           var origLabel = btn.textContent;
           btn.disabled = true; btn.textContent = "Posting…";
-          clubPost("/scores", {
-            nick: nick, level: playerLevel(), stars: totalStars(),
-            trophies: AWARDS.filter(function (a) { return state.awards[a.id]; }).length
+          clubPost("/score", {
+            club: "ellies-game-room", player: nick, game: "overall", level: playerLevel(), xp: state.xp, stars: totalStars(),
+            awards: AWARDS.filter(function (a) { return state.awards[a.id]; }).map(function (a) { return a.id; })
           }).then(function () {
             if (!clubGrant()) markTrialPosted();
             sndGood();
             renderClub();
             showToast({ icon: "★", color: "#f59e0b", kicker: "Score posted!", name: "You're on the Friends Club board", sub: clubGrant() ? "Post again any time to climb higher" : "That was your free first post" });
-          }).catch(function () {
+          }).catch(function (err) {
             btn.disabled = false; btn.textContent = origLabel;
             msg.className = "gate-msg err";
-            msg.textContent = "The club isn't switched on yet, so your score couldn't post — it's safe right here on this device. Try again soon!";
+            if (err && err.message === "adult_approval_required") {
+              msg.textContent = "A grown-up needs to unlock the next level before you can post again.";
+              openGate();
+            } else {
+              msg.textContent = "Your score couldn't post just now — it's safe right here on this device. Try again soon!";
+            }
           });
         });
       }
