@@ -798,13 +798,18 @@
       }
 
       /* ============================================================
-         FRIENDS CLUB — the online scoreboard, behind an ADULT
-         APPROVAL GATE (required fresh EVERY session).
+         FRIENDS CLUB — the online scoreboard. The club's FIRST
+         LEVEL IS A FREE TRIAL: a kid can open the club, see the
+         scoreboard, and post their score ONCE with no email and
+         no code — kids get to try the online features first.
+         The ADULT APPROVAL GATE only appears when they try to go
+         BEYOND that first level (posting again to climb / unlocking
+         the club's next level), framed as an unlock.
          ------------------------------------------------------------
-         Solo games are never gated. Only ONLINE features (the club
-         scoreboard) need a grant, and the grant lives in
-         sessionStorage — it dies when the tab/session ends, so a
-         grown-up approves again on the next visit.
+         Solo games are never gated. The trial flag and the gate
+         grant both live in sessionStorage — they die when the
+         tab/session ends, so a grown-up approves again on the
+         next visit.
          Gate flow (email-code, parents only — kids never type an
          email):
            POST /access/request  { email }       → emails a 6-digit code
@@ -814,10 +819,14 @@
          printable offers for grown-ups, unsubscribe anytime).
          Club nicknames are silly made-up names, bad-word filtered.
          There is NO chat or free text between kids, ever.
+         If the club backend isn't reachable, the board and posting
+         say so honestly ("not switched on yet") — nothing pretends
+         a score posted when it didn't.
          ============================================================ */
       var CLUB_API = ""; // same origin — the scoreboard service serves these routes
       var GRANT_KEY = "rsgClubGrant";
       var NICK_KEY = "rsgClubNick";
+      var TRIAL_KEY = "rsgClubTrial"; // "1" once the free first post is used (this visit only)
 
       function clubGrant() {
         try {
@@ -831,6 +840,16 @@
         try { return window.sessionStorage.getItem(NICK_KEY) || ""; } catch (e) { return ""; }
       }
       function setClubNick(n) { try { window.sessionStorage.setItem(NICK_KEY, n); } catch (e) { /* session-only by design */ } }
+      function trialPosted() {
+        try { return window.sessionStorage.getItem(TRIAL_KEY) === "1"; } catch (e) { return false; }
+      }
+      function markTrialPosted() { try { window.sessionStorage.setItem(TRIAL_KEY, "1"); } catch (e) { /* session-only by design */ } }
+      function clubGet(path) {
+        return fetch(CLUB_API + path).then(function (r) {
+          if (!r.ok) throw new Error("board unavailable");
+          return r.json().catch(function () { return {}; });
+        });
+      }
       function clubPost(path, body) {
         return fetch(CLUB_API + path, {
           method: "POST",
@@ -863,38 +882,23 @@
         return a[Math.floor(Math.random() * a.length)] + b[Math.floor(Math.random() * b.length)];
       }
 
-      /* ---------- club section (locked until a grant exists) ---------- */
-      function renderClub() {
-        var host = document.getElementById("club-section");
-        if (!host) return;
-        var g = clubGrant();
-        if (!g) {
-          host.innerHTML =
-            "<h2>Friends Club Scoreboard</h2>" +
-            "<p>Race your friends! See everyone's <strong>level, stars, and trophies</strong> from all the games on one friendly board. The club lives <strong>online</strong>, so a grown-up has to unlock it first — fresh on every visit.</p>" +
-            '<div class="club-lock"><div class="lock-ico" aria-hidden="true">🔒</div>' +
-            "<p><strong>Locked for now.</strong> A parent or grown-up unlocks the club with a quick email code — it takes about a minute, and it locks again all by itself when the visit ends.</p>" +
-            '<button type="button" class="btn" id="club-unlock">Grown-ups: unlock the club</button></div>' +
-            '<p style="margin-top:14px">Kids: there is <strong>no chatting and no messaging</strong> in the club — just friendly scores. Your club name is a silly made-up nickname, never your real name.</p>';
-          document.getElementById("club-unlock").addEventListener("click", openGate);
-          return;
-        }
-        var nick = clubNick();
-        var earned = AWARDS.filter(function (a) { return state.awards[a.id]; }).length;
-        var l = playerLevel();
-        host.innerHTML =
-          "<h2>Friends Club Scoreboard</h2>" +
-          "<p>Club unlocked for this visit by <strong>" + esc(g.email) + "</strong> — thanks, grown-up! It locks again when this tab closes, and a grown-up says yes again next time.</p>" +
-          '<div><strong>Your club nickname</strong> — a silly made-up name (never your real name):' +
+      /* ---------- club section: free trial first, gate at the next level ---------- */
+      function clubNickHTML(nick) {
+        return '<div><strong>Your club nickname</strong> — a silly made-up name (never your real name):' +
           '<div class="club-card-row"><input class="gate-input club-nick-input" id="club-nick-input" type="text" maxlength="16" placeholder="e.g. TurboOtter" value="' + esc(nick) + '" autocomplete="off" />' +
           '<button type="button" class="btn teal" id="club-nick-save">Save name</button>' +
           '<button type="button" class="btn ghost" id="club-nick-fun">Surprise me!</button></div>' +
-          '<div class="gate-msg" id="club-nick-msg" role="alert"></div></div>' +
-          '<div class="award" style="margin-top:14px"><span class="aw-ico" style="background:#f59e0b">★</span><span><span class="aw-t">Your club card' + (nick ? " — " + esc(nick) : "") + '</span><div class="aw-r">Level ' + l + " · " + levelTitle(l) + " · " + totalStars() + " of 18 stars · " + earned + " of " + AWARDS.length + ' trophies. This is the standing your club friends see.</div></span></div>' +
-          "<p style='margin-top:12px'>Friends in the club appear on this board with their levels, stars, and trophies — friendly rivalry, no chatting. Your standing updates as you finish games while the club is unlocked.</p>" +
-          '<button type="button" class="reset-btn" id="club-lock">Lock the club for now</button>';
+          '<div class="gate-msg" id="club-nick-msg" role="alert"></div></div>';
+      }
+      function clubCardHTML(nick) {
+        var earned = AWARDS.filter(function (a) { return state.awards[a.id]; }).length;
+        var l = playerLevel();
+        return '<div class="award" style="margin-top:14px"><span class="aw-ico" style="background:#f59e0b">★</span><span><span class="aw-t">Your club card' + (nick ? " — " + esc(nick) : "") + '</span><div class="aw-r">Level ' + l + " · " + levelTitle(l) + " · " + totalStars() + " of 18 stars · " + earned + " of " + AWARDS.length + ' trophies. This is the standing your club friends see.</div></span></div>';
+      }
+      function wireClubNick() {
         var nickInput = document.getElementById("club-nick-input");
         var nickMsg = document.getElementById("club-nick-msg");
+        if (!nickInput) return;
         document.getElementById("club-nick-save").addEventListener("click", function () {
           var problem = nickProblem(nickInput.value);
           if (problem) { nickMsg.className = "gate-msg err"; nickMsg.textContent = problem; return; }
@@ -908,11 +912,101 @@
           nickInput.value = funNick(); blip(620, 0.08);
           nickMsg.className = "gate-msg"; nickMsg.textContent = "Like it? Tap “Save name” to keep it — or roll again!";
         });
-        document.getElementById("club-lock").addEventListener("click", function () {
-          try { window.sessionStorage.removeItem(GRANT_KEY); window.sessionStorage.removeItem(NICK_KEY); } catch (e) {}
-          renderClub();
-          showToast({ icon: "🔒", color: "#45B7F0", kicker: "Club locked", name: "A grown-up can unlock it again any time" });
+      }
+      /* the scoreboard itself — visible to everyone, gate or no gate.
+         If the club service isn't reachable, say so honestly. */
+      function loadClubBoard() {
+        var el = document.getElementById("club-board");
+        if (!el) return;
+        clubGet("/scores").then(function (d) {
+          var rows = (d && d.scores) || [];
+          if (!rows.length) {
+            el.innerHTML = '<div class="ledger-row"><span>No friend scores on the board yet — yours could be the first!</span><span></span></div>';
+            return;
+          }
+          el.innerHTML = rows.map(function (s) {
+            return '<div class="ledger-row"><span>' + esc(s.nick || "Club friend") + "</span><span>Level " + (s.level || 1) + " · ★ " + (s.stars || 0) + " · 🏆 " + (s.trophies || 0) + "</span></div>";
+          }).join("");
+        }).catch(function () {
+          el.innerHTML = '<div class="ledger-row"><span>The online board isn\'t switched on yet — when it opens, your friends\' scores will appear right here.</span><span></span></div>';
         });
+      }
+      /* posting: free ONCE on the trial; with a grown-up grant, always.
+         (The trial-used view has no post button — its next step is the gate.) */
+      function wireClubPost() {
+        var btn = document.getElementById("club-post");
+        if (!btn) return;
+        btn.addEventListener("click", function () {
+          var msg = document.getElementById("club-post-msg");
+          var nick = clubNick();
+          if (!nick) {
+            msg.className = "gate-msg err";
+            msg.textContent = "Save a nickname first — that's the name your club friends will see on the board.";
+            return;
+          }
+          var origLabel = btn.textContent;
+          btn.disabled = true; btn.textContent = "Posting…";
+          clubPost("/scores", {
+            nick: nick, level: playerLevel(), stars: totalStars(),
+            trophies: AWARDS.filter(function (a) { return state.awards[a.id]; }).length
+          }).then(function () {
+            if (!clubGrant()) markTrialPosted();
+            sndGood();
+            renderClub();
+            showToast({ icon: "★", color: "#f59e0b", kicker: "Score posted!", name: "You're on the Friends Club board", sub: clubGrant() ? "Post again any time to climb higher" : "That was your free first post" });
+          }).catch(function () {
+            btn.disabled = false; btn.textContent = origLabel;
+            msg.className = "gate-msg err";
+            msg.textContent = "The club isn't switched on yet, so your score couldn't post — it's safe right here on this device. Try again soon!";
+          });
+        });
+      }
+      function renderClub() {
+        var host = document.getElementById("club-section");
+        if (!host) return;
+        var g = clubGrant();
+        var nick = clubNick();
+        var head = "<h2>Friends Club Scoreboard</h2>";
+        var boardHTML = '<div class="ledger" id="club-board" style="margin-top:14px"><div class="ledger-row"><span>Checking the board…</span><span></span></div></div>';
+        var safety = '<p style="margin-top:14px">Kids: there is <strong>no chatting and no messaging</strong> in the club — just friendly scores. Your club name is a silly made-up nickname, never your real name.</p>';
+        if (g) {
+          /* unlocked by a grown-up for this visit — full club, post any time */
+          host.innerHTML = head +
+            "<p>Club unlocked for this visit by <strong>" + esc(g.email) + "</strong> — thanks, grown-up! It locks again when this tab closes, and a grown-up says yes again next time.</p>" +
+            clubNickHTML(nick) + clubCardHTML(nick) + boardHTML +
+            '<div class="club-card-row"><button type="button" class="btn teal" id="club-post">Post my score</button></div>' +
+            '<div class="gate-msg" id="club-post-msg" role="alert"></div>' +
+            "<p style='margin-top:12px'>Friends in the club appear on this board with their levels, stars, and trophies — friendly rivalry, no chatting. Post again any time to climb higher.</p>" +
+            '<button type="button" class="reset-btn" id="club-lock">Lock the club for now</button>';
+          wireClubNick(); wireClubPost(); loadClubBoard();
+          document.getElementById("club-lock").addEventListener("click", function () {
+            try { window.sessionStorage.removeItem(GRANT_KEY); window.sessionStorage.removeItem(NICK_KEY); } catch (e) {}
+            renderClub();
+            showToast({ icon: "🔒", color: "#45B7F0", kicker: "Club locked", name: "A grown-up can unlock it again any time" });
+          });
+          return;
+        }
+        if (trialPosted()) {
+          /* free first post used — the NEXT step is where the grown-up gate lives */
+          host.innerHTML = head +
+            "<p>Race your friends! See everyone's <strong>level, stars, and trophies</strong> from all the games on one friendly board. You already posted your <strong>free first score</strong> — nice one!</p>" +
+            clubNickHTML(nick) + clubCardHTML(nick) + boardHTML +
+            '<div class="club-lock" style="margin-top:16px"><div class="lock-ico" aria-hidden="true">⭐</div>' +
+            "<p><strong>You're doing great!</strong> To post again, climb higher, and unlock the club's next level, a grown-up says ok with a quick email code.</p>" +
+            '<button type="button" class="btn" id="club-unlock-next">Unlock the next level</button></div>' +
+            safety;
+          wireClubNick(); loadClubBoard();
+          document.getElementById("club-unlock-next").addEventListener("click", openGate);
+          return;
+        }
+        /* free trial — the club's first level: look around and post once, no email, no code */
+        host.innerHTML = head +
+          "<p>Race your friends! See everyone's <strong>level, stars, and trophies</strong> from all the games on one friendly board. The club's first level is a <strong>free try</strong> — post your score once with no email and no code. A grown-up only unlocks the next level after that.</p>" +
+          clubNickHTML(nick) + clubCardHTML(nick) + boardHTML +
+          '<div class="club-card-row"><button type="button" class="btn" id="club-post">Post my score — free first try!</button></div>' +
+          '<div class="gate-msg" id="club-post-msg" role="alert"></div>' +
+          safety;
+        wireClubNick(); wireClubPost(); loadClubBoard();
       }
 
       /* ---------- the grown-up gate (email + 6-digit code) ---------- */
@@ -924,8 +1018,9 @@
           '<div class="overlay"><div class="celebrate step-in" style="text-align:left">' +
             '<div style="text-align:center;font-size:42px" aria-hidden="true">🔐</div>' +
             '<h2 style="text-align:center">Grown-ups only</h2>' +
-            "<p><strong>Kids — this part is for a parent or grown-up!</strong> Hand them the screen. The Friends Club is online, so a grown-up unlocks it fresh on every visit.</p>" +
-            "<p>Grown-up: enter <strong>your own</strong> email and we'll send you a 6-number code. Type the code here and the club opens for this visit only — it locks again when the tab closes.</p>" +
+            "<p style=\"text-align:center\"><strong>You're doing great! To unlock the next level, a grown-up says ok.</strong></p>" +
+            "<p><strong>Kids — this part is for a parent or grown-up!</strong> Hand them the screen. The club's first post was free — unlocking the next level needs a grown-up, fresh on every visit.</p>" +
+            "<p>Grown-up: enter <strong>your own</strong> email and we'll send you a 6-number code. Type the code here and the club's next level opens for this visit only — it locks again when the tab closes.</p>" +
             '<input class="gate-input" id="gate-email" type="email" inputmode="email" autocomplete="email" placeholder="Parent or grown-up email" />' +
             '<div class="gate-msg" id="gate-msg" role="alert"></div>' +
             '<p style="font-size:13.5px;margin-top:12px">Fair and square: this email also joins the <strong>Real Skills Press parent list</strong>, so Lisa can send you game news and printable-pack offers for grown-ups. No spam, your email is never sold or shared, and every message has an unsubscribe link — leave any time.</p>' +
